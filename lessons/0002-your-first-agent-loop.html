@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 2 课 · 手写最小 Agent 循环</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+<div class="wrap">
+
+  <div class="course-meta">AI Agent 开发与前沿研究 · 第 2 课</div>
+  <h1 class="lesson-title">手写最小 Agent 循环<br>把 ReAct 跑成代码</h1>
+  <p class="lede">
+    上一课你建立了心智模型。这一课，我们用 Python 把它变成<strong>真正能跑的代码</strong>——
+    而且是一个你立刻就能运行、零依赖、连 API key 都不需要的版本。
+  </p>
+
+  <div class="tag-row">
+    <span class="tag">⏱ 约 20 分钟</span>
+    <span class="tag">🐍 动手写码</span>
+    <span class="tag">⚡ 立刻可运行</span>
+    <span class="tag">🔗 衔接第 1 课 ReAct</span>
+  </div>
+
+  <div class="wins">
+    <span class="head">本节你会获得</span>
+    <ul>
+      <li>亲手把 ReAct 循环写成 Python，看懂每一行<strong>为什么</strong>。</li>
+      <li>钉死一个关键认知（也是面试深水区）：<strong>模型只「请求」工具，真正「执行」的是你的代码</strong>。</li>
+      <li>理解 Agent 的本质就是一个 <code>while</code> 循环，模型只是其中一步。</li>
+      <li>一个能立刻运行、可改造的最小工程模板。</li>
+    </ul>
+  </div>
+
+  <!-- ============ 1 ============ -->
+  <h2><span class="num">01</span>先纠正一个最大的误区</h2>
+
+  <p>很多人第一次听说「大模型能调用工具」时，脑子里是这样的画面：</p>
+
+  <blockquote style="color:#b03b32;">❌ 误以为：「模型调用 <code>get_weather</code>」＝ 模型自己跑去查了天气，把结果算出来了。</blockquote>
+
+  <p>真相完全不是这样。真正发生的是<strong>两段</strong>：</p>
+
+  <div class="trace">
+    <div class="row"><span class="k act">① 请求</span><span class="v">模型<strong>输出一段结构化文字</strong>：「我想调用 <code>get_weather</code>，参数 <code>city="北京"</code>」。注意——它只是<em>说</em>要调，<strong>自己并没有真的执行</strong>。</span></div>
+    <div class="row"><span class="k obs">② 执行</span><span class="v"><strong>你的代码</strong>读到这段请求，<strong>由你来</strong>真正运行 <code>get_weather("北京")</code>，再把结果作为「观察」喂回给模型。</span></div>
+  </div>
+
+  <div class="callout insight">
+    <span class="head">这一刻，黑魔法就消失了</span>
+    模型不会运行你的函数、不能碰你的数据库、不能联网——它只会<strong>说话</strong>。
+    所谓「工具调用」，本质是「模型说了一句你约定好的、机器可解析的话，<em>然后你照着办</em>」。
+    把这句话想通，后面的一切都顺了。
+  </div>
+
+  <!-- ============ 2 ============ -->
+  <h2><span class="num">02</span>Agent 的灵魂：一个 while 循环</h2>
+
+  <p>把上一课的 ReAct（Thought → Action → Observation）翻译成代码，就是这样一个循环：</p>
+
+  <pre><code>def run_agent(user_task):
+    messages = [{"role": "user", "content": user_task}]
+    while True:                              # ← Agent 的灵魂就是这个循环
+        response = llm(messages)             # ① 模型决定下一步
+        if response 想调用工具:
+            结果 = 你执行那个工具(参数)        # ② 你的代码真正执行
+            把结果喂回 messages              # ③ 让模型「看见」结果
+        else:                                # ④ 模型不再要工具 → 给最终答案
+            return response 的文本</code></pre>
+
+  <p>注意三件事：</p>
+  <ul>
+    <li><strong>循环是「你的」</strong>，不是模型内部的。是你在 <code>while True</code> 里反复喊模型。</li>
+    <li><strong>执行工具是「你的」</strong>（第 ② 行）。模型只在第 ① 行「请求」。</li>
+    <li><strong>记忆就是 <code>messages</code></strong>——每一步都把新内容 append 进去，下一轮模型就能看到全部历史（这就是它「记得」的方式）。</li>
+  </ul>
+
+  <div class="callout warn">
+    <span class="head">为什么必须有个 max_steps</span>
+    <code>while True</code> 有风险：模型可能反复要调工具、永远不停。所以真实代码一定加一个<strong>最大步数</strong>兜底。这是工程上的常识，面试也会问。
+  </div>
+
+  <!-- ============ 3 ============ -->
+  <h2><span class="num">03</span>立刻运行它（零依赖版）</h2>
+
+  <p>我写了一个<strong>不需要任何 API key、不依赖第三方库</strong>的最小 Agent。
+  它的「模型」是个写死的脚本——为的是让你<strong>先看清循环本身</strong>。完整代码在
+  <a href="../code/0002_min_agent_mock.py" download>code/0002_min_agent_mock.py</a>，关键部分如下：</p>
+
+  <pre><code># 工具：真正「做事」的 Python 函数（你的代码）
+def get_weather(city: str) -> str:
+    return {"北京": "5°C，西北风 6 级"}.get(city, "暂无数据")
+
+TOOLS = {"get_weather": get_weather}     # 工具名 -> 函数
+
+def run_agent(user_task, max_steps=5):
+    messages = [{"role": "user", "content": user_task}]
+    for step in range(max_steps):        # ← 循环（带兜底）
+        response = llm(messages)         # ① 模型决定下一步
+        if response["kind"] == "tool_use":
+            name, args = response["name"], response["input"]
+            result = TOOLS[name](**args) # ② 你的代码真正执行
+            messages.append({"role": "user", "content": f"{name} => {result}"})  # ③ 喂回去
+        else:
+            return response["text"]      # ④ 给最终答案</code></pre>
+
+  <p>在项目根目录运行（任何装了 Python 的机器都行）：</p>
+  <pre><code>python3 code/0002_min_agent_mock.py</code></pre>
+
+  <p>你会看到——这是我<strong>亲自跑出来的真实输出</strong>，不是编的：</p>
+
+  <pre><code>👤 任务: 今天北京适合穿什么？
+
+🧠 Thought : 我需要调用 get_weather({'city': '北京'})
+⚙️  Action  : get_weather(**{'city': '北京'})
+👁  Observe : 5°C，西北风 6 级
+
+✅ Final   : 今天北京 5°C 且大风，建议穿厚外套、围巾，注意防风保暖。</code></pre>
+
+  <div class="callout note">
+    <span class="head">对照第 1 课看</span>
+    <code>Thought / Action / Observe / Final</code> 正是上一课 ReAct 的四行。
+    心智模型 ↔ 代码，一一对应。现在你亲手把它们连起来了。
+  </div>
+
+  <!-- ============ 4 ============ -->
+  <h2><span class="num">04</span>换上真实模型，只改一个函数</h2>
+
+  <p>当你有了 API key，要做的事<strong>少得惊人</strong>——只把那个假的 <code>llm()</code> 换成对 Claude 的真实调用，<strong>循环主体一行都不用改</strong>。</p>
+
+  <p>真实版的工具「说明书」是这样的（模型靠它判断何时、怎么调）：</p>
+
+  <pre><code>TOOL_SPECS = [{
+    "name": "get_weather",
+    "description": "获取指定城市的实时天气。",
+    "input_schema": {
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+        "required": ["city"],
+    },
+}]</code></pre>
+
+  <p>真实版的完整代码在 <a href="../code/0002_min_agent_anthropic.py" download>code/0002_min_agent_anthropic.py</a>。
+  对比两个文件你会发现：<strong>结构完全一样，只有 <code>llm()</code> 内部不同</strong>。这就是 Agent 的本质——一个与具体模型解耦的循环。</p>
+
+  <p>👉 API 形态依据 <a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview" target="_blank" rel="noopener">Anthropic 官方 Tool use 文档</a>（2026-06 核实）。</p>
+
+  <!-- ============ 5 ============ -->
+  <h2><span class="num">05</span>检验一下</h2>
+  <p>凭记忆答——别翻上面。</p>
+
+  <div class="quiz">
+    <div class="q"><span class="qnum">Q1</span>在 tool use 里，真正「执行」工具函数的是谁？</div>
+    <div class="quiz-opts">
+      <button class="quiz-option" data-correct>你自己写的代码</button>
+      <button class="quiz-option">大模型自己执行</button>
+      <button class="quiz-option">操作系统内核层</button>
+      <button class="quiz-option">云服务商服务器</button>
+    </div>
+    <div class="feedback"></div>
+  </div>
+
+  <div class="quiz">
+    <div class="q"><span class="qnum">Q2</span>一个<strong>正常完成</strong>的 Agent 循环，靠什么判断「任务做完了」？</div>
+    <div class="quiz-opts">
+      <button class="quiz-option" data-correct>模型不再请求调用工具</button>
+      <button class="quiz-option">达到了设定的最大步数</button>
+      <button class="quiz-option">用户手动按下停止键</button>
+      <button class="quiz-option">服务器返回了错误信息</button>
+    </div>
+    <div class="feedback"></div>
+  </div>
+
+  <div class="quiz">
+    <div class="q"><span class="qnum">Q3</span>把工具执行结果喂回给模型，是为了让它能______。</div>
+    <div class="quiz-opts">
+      <button class="quiz-option" data-correct>据观察决定下一步</button>
+      <button class="quiz-option">永久记忆所有对话</button>
+      <button class="quiz-option">跳过全部工具调用</button>
+      <button class="quiz-option">节省模型调用费用</button>
+    </div>
+    <div class="feedback"></div>
+  </div>
+
+  <p style="text-align:right;font-size:.85rem;color:var(--ink-faint);">本页得分：<span id="page-score">0 / 0 正确</span></p>
+
+  <!-- ============ 6 ============ -->
+  <h2><span class="num">06</span>动手改造（应用层练习）</h2>
+  <p>打开 <a href="../code/0002_min_agent_mock.py" download>code/0002_min_agent_mock.py</a>，做这两件事——动手改是建立 storage strength 最有效的方式：</p>
+
+  <p><strong>任务 A</strong>：加一个 <code>calculate(expression)</code> 工具（用 Python 内置的 <code>eval</code> 即可），再让脚本先问天气、再算一笔账，跑通两个工具的循环。</p>
+  <p><strong>任务 B</strong>：把 <code>max_steps</code> 改成 <code>1</code>，观察会发生什么，并用一句话解释原因。</p>
+
+  <button class="reveal-btn" data-show="显示任务 B 的答案" data-hide="收起">显示任务 B 的答案</button>
+  <div class="reveal-content">
+    <p>把 <code>max_steps=1</code> 后，循环只允许跑<strong>一轮</strong>。第一轮模型请求调用工具，工具执行完、结果喂回去——但循环已到上限，<strong>没机会让模型看到结果并给出最终答案</strong>，于是打印「⚠️ 达到最大步数，强制停止」。</p>
+    <p style="font-size:.9rem;color:var(--ink-faint);">这恰好证明了：Agent 需要「至少 N 步」才能完成一个需要 N 次工具调用的任务。max_steps 不是摆设，它是任务复杂度的硬约束。</p>
+  </div>
+
+  <!-- ============ 主源 ============ -->
+  <div class="source">
+    <span class="head">📖 推荐主源</span>
+    <p style="margin-bottom:.5rem;"><strong>动手参考（必读）</strong>：<a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview" target="_blank" rel="noopener">Tool use with Claude — 官方文档</a>。照着把真实版跑通。</p>
+    <p style="margin-bottom:.5rem;"><strong>官方完整循环</strong>：<a href="https://github.com/anthropics/courses" target="_blank" rel="noopener">Anthropic 官方课程仓库</a> 里的 tool-use 章节，有工业级写法（含 streaming、并行工具、错误处理）。</p>
+    <p style="margin-bottom:0;"><strong>跨厂商对照</strong>：<a href="https://developers.openai.com/api/docs/guides/function-calling" target="_blank" rel="noopener">OpenAI Function calling</a>——思路一致，只是请求/返回的字段名不同。</p>
+  </div>
+
+  <!-- ============ 联系 mission ============ -->
+  <h2><span class="num">07</span>这和你两条目标的关系</h2>
+  <ul>
+    <li><strong>求职线</strong>：「写一个最小的 tool-use agent 循环」是 AI 工程岗的高频手撕题；「模型只请求、代码才执行」是区分背过八股和真正懂的人的分水岭。</li>
+    <li><strong>研究线</strong>：你现在能把 ReAct 论文里的 Figure 1（那个 Thought/Action/Observation 的轨迹）<strong>逐行对应到代码</strong>了——读论文时这就叫「真正读懂」。</li>
+  </ul>
+
+  <div class="callout insight">
+    <span class="head">下一课预告</span>
+    第 3 课：这个循环有个致命隐患——<strong>对话越滚越长，token 越烧越多，直到撑爆上下文窗口</strong>。
+    我们要讲 <strong>记忆与上下文管理</strong>：滑动窗口、摘要压缩、以及什么时候需要向量检索（RAG）。这是 Agent 能不能上生产的分水岭。
+  </div>
+
+  <div class="callout warn">
+    <span class="head">有问题随时问老师 👋</span>
+    比如「为什么 tool_result 要放在 user 角色里」「并行调用多个工具怎么处理」「流式输出（streaming）怎么改」——直接问。
+  </div>
+
+  <div class="lesson-foot">
+    <p>📁 <a href="../MISSION.md">Mission</a> · <a href="../GLOSSARY.md">术语表</a> · <a href="../RESOURCES.md">资源库</a> · <a href="../NOTES.md">学习笔记</a></p>
+    <div class="nav-row">
+      <a href="./0001-what-is-an-ai-agent.html">← 第 1 课：什么是 AI Agent</a>
+      <a href="./0003-memory-and-context.html">第 3 课：记忆与上下文管理 →</a>
+    </div>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

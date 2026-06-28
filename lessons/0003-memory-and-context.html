@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 3 课 · 记忆与上下文管理</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+<div class="wrap">
+
+  <div class="course-meta">AI Agent 开发与前沿研究 · 第 3 课</div>
+  <h1 class="lesson-title">记忆与上下文管理<br>Agent 能不能上生产的分水岭</h1>
+  <p class="lede">
+    第 2 课你写下「记忆 = messages」。这一课直面它的致命隐患：messages 会越滚越长，
+    token 成本爆炸，最终撑爆上下文窗口。怎么治——这正是业余与工业级的分界线。
+  </p>
+
+  <div class="tag-row">
+    <span class="tag">⏱ 约 18 分钟</span>
+    <span class="tag">🧠 核心概念</span>
+    <span class="tag">⚡ 含可运行演示</span>
+    <span class="tag">📦 上生产必读</span>
+  </div>
+
+  <div class="wins">
+    <span class="head">本节你会获得</span>
+    <ul>
+      <li>分清<strong>两种记忆</strong>：上下文内（in-context）vs 外部（external）。</li>
+      <li>掌握应对上下文膨胀的<strong>三种策略</strong>：滑动窗口、摘要压缩、RAG——及各自代价。</li>
+      <li>学会 2026 的关键心智：<strong>context engineering</strong>（优化「填进窗口的东西」，而非只优化问题）。</li>
+      <li>拿到一张<strong>RAG vs 长上下文</strong>决策表，和 prompt caching 这个「上生产必杀技」。</li>
+    </ul>
+  </div>
+
+  <!-- ============ 1 ============ -->
+  <h2><span class="num">01</span>先看清问题：messages 会一直涨</h2>
+
+  <p>第 2 课的循环里，每一步都往 <code>messages</code> 里 append。对话一长，这条数组就无止境地增长。后果有二：</p>
+  <ol>
+    <li><strong>成本爆炸</strong>：API 按 token 计费，每轮都把<strong>全部历史</strong>重新发一遍，越往后越贵。</li>
+    <li><strong>撑爆窗口</strong>：模型有<strong>上下文窗口上限</strong>（见术语表）。超过就报错，或被迫截断——而截掉的可能正是关键信息。</li>
+  </ol>
+
+  <p>我把这个抽象问题做成了可运行演示（<a href="../code/0003_context_management_demo.py" download>code/0003_context_management_demo.py</a>），这是我<strong>亲自跑出的真实数字</strong>：</p>
+
+  <pre><code>=== 三种方式 token 对比 ===
+  · 原始          16 条消息 ≈ 55 tokens   ← 对话再长，这个数只会涨
+  · 滑动窗口       4 条消息 ≈ 15 tokens   ← 最省，但丢了旧信息
+  · 摘要压缩       5 条消息 ≈ 43 tokens   ← 省空间，又保住要点</code></pre>
+
+  <div class="callout note">
+    <span class="head">自己跑一遍</span>
+    <code>python3 code/0003_context_management_demo.py</code> —— 改一改对话内容，观察数字怎么变。眼看比脑想管用十倍。
+  </div>
+
+  <!-- ============ 2 ============ -->
+  <h2><span class="num">02</span>关键重分类：两种记忆</h2>
+
+  <p>第 2 课那句「记忆 = messages」其实只说对了一半——它特指<strong>上下文内记忆</strong>：</p>
+
+  <table class="cmp">
+    <thead><tr><th></th><th>上下文内记忆 (in-context)</th><th>外部记忆 (external)</th></tr></thead>
+    <tbody>
+      <tr><td><strong>存在哪</strong></td><td>就塞在 messages / prompt 里</td><td>放在数据库、向量库、文件里</td></tr>
+      <tr><td><strong>容量</strong></td><td>受上下文窗口硬限制</td><td class="win">几乎无限</td></tr>
+      <tr><td><strong>模型怎么用</strong></td><td>每次都全部「看见」</td><td>按需检索一小部分塞进窗口</td></tr>
+      <tr><td><strong>代价</strong></td><td>占 token、贵、易超限</td><td>需要检索（多一步）</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout insight">
+    <span class="head">一句话</span>
+    <strong>上下文内记忆</strong>＝模型此刻「眼前」的东西（贵但即时）；<strong>外部记忆</strong>＝模型的「笔记本」，要用时翻一页出来。
+    高级 Agent 的核心本领，就是在两者之间聪明地搬数据。
+  </div>
+
+  <!-- ============ 3 ============ -->
+  <h2><span class="num">03</span>2026 心智升级：Context Engineering</h2>
+
+  <p>这一两年的行业共识是：光会写好 prompt 不够了。区别在于——</p>
+  <ul>
+    <li><strong>Prompt engineering（提示工程）</strong>：优化「<em>怎么问</em>」——把问题措辞写好。</li>
+    <li><strong>Context engineering（上下文工程）</strong>：优化「<em>填进窗口的整个信息环境</em>」——系统提示、记忆、检索来的文档、工具结果，怎么编排、何时丢弃。</li>
+  </ul>
+
+  <blockquote>
+    Prompt 工程优化「问题」；Context 工程优化「问题被回答的<em>条件</em>」。
+    对 Agent 而言，后者才是主战场。
+  </blockquote>
+  <p style="font-size:.85rem;color:var(--ink-faint);">来源：<a href="https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents" target="_blank" rel="noopener">Effective Context Engineering for AI Agents — Anthropic</a> 及多家 2026 综述。</p>
+
+  <!-- ============ 4 ============ -->
+  <h2><span class="num">04</span>三种策略：从简单到强大</h2>
+
+  <table class="cmp">
+    <thead><tr><th>策略</th><th>怎么做</th><th>优点</th><th>代价</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>滑动窗口</strong></td>
+        <td>只保留最近 K 条，丢最旧的</td>
+        <td class="win">最简单、最省 token</td>
+        <td class="lose">丢掉旧信息（可能正好是关键的）</td>
+      </tr>
+      <tr>
+        <td><strong>摘要压缩</strong></td>
+        <td>把旧消息压成一条摘要，留最近几条</td>
+        <td class="win">省空间又保住要点</td>
+        <td class="lose">摘要本身要一次模型调用；可能丢细节</td>
+      </tr>
+      <tr>
+        <td><strong>RAG 检索</strong></td>
+        <td>记忆全存外部，每轮按需检索相关片段</td>
+        <td class="win">容量无限、可更新、可溯源</td>
+        <td class="lose">工程复杂；检索质量决定一切</td>
+      </tr>
+    </tbody>
+    <caption>选型不是「越高级越好」——够用就行。简单对话用滑动窗口足矣。</caption>
+  </table>
+
+  <p>这三者还能<strong>组合</strong>：比如「滑动窗口兜底 + 摘要压缩中期 + RAG 长期」，是生产系统常见架构。</p>
+
+  <!-- ============ 5 ============ -->
+  <h2><span class="num">05</span>上生产必杀技：Prompt Caching</h2>
+
+  <p>它解决的是<strong>另一个维度</strong>的问题——不减 token，但大幅减<em>钱和时间</em>。原理：</p>
+
+  <div class="callout insight">
+    <span class="head">为什么有效</span>
+    Agent 循环里，<strong>系统提示 + 工具定义 + 早期历史</strong>在每轮几乎不变。这块「稳定前缀」可以被服务端缓存复用，不必每次重算。
+  </div>
+
+  <table class="cmp">
+    <thead><tr><th>指标</th><th>效果（Anthropic 官方数据）</th></tr></thead>
+    <tbody>
+      <tr><td>成本</td><td class="win">↓ 约 90%</td></tr>
+      <tr><td>延迟</td><td class="win">↓ 约 85%</td></tr>
+      <tr><td>机制</td><td>按「前缀匹配」缓存；用 <code>cache_control</code> 标记断点（单次最多 4 个）</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout warn">
+    <span class="head">三个命中率铁律</span>
+    ① 系统 prompt 和<strong>工具定义</strong>尽量保持稳定，别中途改；<br>
+    ② 缓存的是<strong>前缀</strong>——前面的内容一动，后面全部失效；<br>
+    ③ 因此把<strong>不变的东西放前面、易变的放后面</strong>（如最新一轮对话）。
+  </div>
+
+  <!-- ============ 6 ============ -->
+  <h2><span class="num">06</span>决策表：RAG vs 长上下文</h2>
+
+  <p>当知识量很大时，「全塞进长上下文」还是「RAG 检索」是高频选择题。实测结论（多家 2026 对比）：</p>
+  <ul>
+    <li>单文档深推理：长上下文更准（约 <strong>+34%</strong>）。</li>
+    <li>跨文档综合：RAG 更准（约 <strong>+67%</strong>），且成本/延迟低约 <strong>8 倍</strong>。</li>
+    <li>2026 共识：不是二选一，<strong>混合</strong>（RAG 取回片段 + 长上下文做深推理）往往是最佳。</li>
+  </ul>
+
+  <table class="cmp">
+    <thead><tr><th>场景</th><th>用哪个</th></tr></thead>
+    <tbody>
+      <tr><td>知识库远超窗口（如百万字）</td><td class="win">RAG</td></tr>
+      <tr><td>内容频繁更新（商品、新闻）</td><td class="win">RAG</td></tr>
+      <tr><td>需要引用来源 / 可溯源</td><td class="win">RAG</td></tr>
+      <tr><td>跨多篇文档做综合</td><td class="win">RAG（+67%）</td></tr>
+      <tr><td>单文档深推理（代码审查、合同）</td><td class="win">长上下文（+34%）</td></tr>
+      <tr><td>既要大规模又要深推理</td><td class="win">混合</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ============ 7 测验 ============ -->
+  <h2><span class="num">07</span>检验一下</h2>
+
+  <div class="quiz">
+    <div class="q"><span class="qnum">Q1</span>第 2 课的「记忆 = messages」属于哪类记忆？</div>
+    <div class="quiz-opts">
+      <button class="quiz-option" data-correct>上下文内记忆</button>
+      <button class="quiz-option">外部长期记忆</button>
+      <button class="quiz-option">持久化数据库</button>
+      <button class="quiz-option">向量检索库</button>
+    </div>
+    <div class="feedback"></div>
+  </div>
+
+  <div class="quiz">
+    <div class="q"><span class="qnum">Q2</span>Prompt caching 能省钱，靠的是什么机制？</div>
+    <div class="quiz-opts">
+      <button class="quiz-option" data-correct>稳定前缀被缓存复用</button>
+      <button class="quiz-option">把冗余的历史删除掉</button>
+      <button class="quiz-option">换用更小的模型推理</button>
+      <button class="quiz-option">减少工具调用的次数</button>
+    </div>
+    <div class="feedback"></div>
+  </div>
+
+  <div class="quiz">
+    <div class="q"><span class="qnum">Q3</span>知识库有 500 万字、且内容天天更新，优先用？</div>
+    <div class="quiz-opts">
+      <button class="quiz-option" data-correct>RAG 按需检索</button>
+      <button class="quiz-option">全塞进长上下文</button>
+      <button class="quiz-option">滑动窗口丢历史</button>
+      <button class="quiz-option">摘要压缩老历史</button>
+    </div>
+    <div class="feedback"></div>
+  </div>
+
+  <p style="text-align:right;font-size:.85rem;color:var(--ink-faint);">本页得分：<span id="page-score">0 / 0 正确</span></p>
+
+  <!-- ============ 8 动手 ============ -->
+  <h2><span class="num">08</span>动手（应用层）</h2>
+  <p>打开 <a href="../code/0003_context_management_demo.py" download>code/0003_context_management_demo.py</a>：</p>
+  <p><strong>任务 A</strong>：在 <code>build_history()</code> 里再加 2 个城市，重跑，观察「原始」和「摘要压缩」的差距是变大还是变小，并用一句话解释为什么。</p>
+  <p><strong>任务 B</strong>：如果你<strong>全程只用滑动窗口</strong>，这个会话会在哪一步「失忆」？这对什么样的任务是致命的？</p>
+
+  <button class="reveal-btn" data-show="显示参考思路" data-hide="收起">显示参考思路</button>
+  <div class="reveal-content">
+    <p><strong>A</strong>：差距会<strong>变大</strong>。对话越长，原始 token 线性增长，而「摘要压缩」始终≈「一条摘要 + 最近 K 条」，增长慢得多——这正是摘要策略的价值随对话长度<strong>放大</strong>。</p>
+    <p><strong>B</strong>：滑动窗口会在「最冷/最暖是哪个城市」这种<strong>需要跨历史综合</strong>的问题上失忆——因为最早的几个城市数据已被丢弃。对<strong>长程依赖</strong>（财务对账、多轮订票、客服跟进）类任务是致命的。这正是摘要/RAG 存在的理由。</p>
+  </div>
+
+  <!-- ============ 主源 ============ -->
+  <div class="source">
+    <span class="head">📖 推荐主源（本课必读）</span>
+    <p style="margin-bottom:.5rem;"><strong>头号主源</strong>：<a href="https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents" target="_blank" rel="noopener">Effective Context Engineering for AI Agents — Anthropic</a>。系统讲如何为 Agent 策展上下文。</p>
+    <p style="margin-bottom:.5rem;"><strong>Prompt caching 细节</strong>：<a href="https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching" target="_blank" rel="noopener">Anthropic Prompt Caching 文档</a>（<code>cache_control</code>、4 断点、定价）。</p>
+    <p style="margin-bottom:0;"><strong>RAG vs 长上下文</strong>：<a href="https://redis.io/blog/rag-vs-large-context-window-ai-apps/" target="_blank" rel="noopener">RAG vs Large Context — Redis</a> · <a href="https://www.llamaindex.ai/blog/towards-long-context-rag" target="_blank" rel="noopener">混合架构趋势 — LlamaIndex</a></p>
+  </div>
+
+  <!-- ============ 联系 mission ============ -->
+  <h2><span class="num">09</span>这和你两条目标的关系</h2>
+  <ul>
+    <li><strong>求职线</strong>：「对话变长怎么办」「RAG 和长上下文怎么选」「怎么省钱」是 AI 工程岗的硬核题。能说出 prompt caching 的前缀匹配 + 90% 降本，立刻拉开档次。</li>
+    <li><strong>研究线</strong>：context engineering 是 2025–2026 的显学；RAG vs 长上下文有大量论文（如 <a href="https://arxiv.org/html/2501.01880v1" target="_blank" rel="noopener">arXiv:2501.01880</a>），读懂决策表你就能快速判断新工作的定位。</li>
+  </ul>
+
+  <div class="callout insight">
+    <span class="head">下一课预告</span>
+    循环、工具、记忆你都凑齐了。第 4 课进入<strong>工具设计</strong>进阶：怎么把工具写得让模型「愿意调、调得对」——描述、参数 schema、错误返回的设计，以及<strong>并行调用</strong>多个工具。这是 Agent 能力的下一个台阶。
+  </div>
+
+  <div class="callout warn">
+    <span class="head">有问题随时问老师 👋</span>
+    比如「摘要该多久做一次」「RAG 的向量库怎么选」「prompt caching 和滑动窗口冲突吗」——直接问。
+  </div>
+
+  <div class="lesson-foot">
+    <p>📁 <a href="../MISSION.md">Mission</a> · <a href="../GLOSSARY.md">术语表</a> · <a href="../RESOURCES.md">资源库</a> · <a href="../NOTES.md">学习笔记</a></p>
+    <div class="nav-row">
+      <a href="./0002-your-first-agent-loop.html">← 第 2 课：手写最小 Agent 循环</a>
+      <a href="./0004-designing-tools.html">第 4 课：工具设计进阶 →</a>
+    </div>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

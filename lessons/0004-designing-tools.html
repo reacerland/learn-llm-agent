@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 4 课 · 工具设计进阶</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+<div class="wrap">
+
+  <div class="course-meta">AI Agent 开发与前沿研究 · 第 4 课</div>
+  <h1 class="lesson-title">工具设计进阶<br>让模型「愿意调、调得对」</h1>
+  <p class="lede">
+    第 2 课你学会了工具的<strong>机制</strong>（怎么接进循环）。这一课讲<strong>设计</strong>——
+    因为工具是写给一个「读说明书来决定用哪个」的非人类读者（模型）的。设计得好坏，
+    直接决定模型会不会调、调得对不对。
+  </p>
+
+  <div class="tag-row">
+    <span class="tag">⏱ 约 18 分钟</span>
+    <span class="tag">🐍 含可运行演示</span>
+    <span class="tag">🛠 错误自愈 + 并行调用</span>
+    <span class="tag">📦 生产必备</span>
+  </div>
+
+  <div class="wins">
+    <span class="head">本节你会获得</span>
+    <ul>
+      <li>掌握「好工具」的解剖结构：名字、描述、参数各该怎么写。</li>
+      <li>学会一个反直觉但关键的模式：<strong>工具出错要当数据返回，而不是抛异常</strong>。</li>
+      <li>看懂并实现<strong>并行工具调用</strong>：一轮多工具、一起返回。</li>
+      <li>知道「工具不是越多越好」——少而精、命名空间化。</li>
+    </ul>
+  </div>
+
+  <!-- ============ 1 ============ -->
+  <h2><span class="num">01</span>核心认知：工具是写给模型读的</h2>
+
+  <p>模型怎么决定「这一步用哪个工具」？它<strong>读工具的名字和描述</strong>，再对照当前任务做判断
+  （[Anthropic 的 advanced tool use 文档](https://www.anthropic.com/engineering/advanced-tool-use) 明说：工具发现是「按名字和描述匹配」）。</p>
+
+  <div class="callout insight">
+    <span class="head">这一句决定一切</span>
+    工具的<strong>描述</strong>是影响「调用准确率」最大的因素——比名字、比参数都重要。
+    官方原话：要写「<em>extremely detailed descriptions</em>（极其详细的描述）」。
+  </div>
+
+  <p>所以写工具，本质是在给一个聪明的、但<strong>只看说明书</strong>的助手写操作手册。</p>
+
+  <!-- ============ 2 ============ -->
+  <h2><span class="num">02</span>好工具 vs 差工具：直接对比</h2>
+
+  <p>同一个「搜索」功能，差定义和好定义天差地别：</p>
+
+  <h3 style="color:#b03b32;">❌ 差的定义</h3>
+  <pre><code>{
+  "name": "search",
+  "description": "搜索",
+  "input_schema": {
+    "type": "object",
+    "properties": { "q": { "type": "string" } }
+  }
+}</code></pre>
+  <p style="font-size:.9rem;color:var(--ink-faint);">问题：名字太泛（搜什么？）、描述等于没说（什么时候用？返回什么？）、参数 <code>q</code> 含义不明。</p>
+
+  <h3 style="color:var(--note-edge);">✅ 好的定义</h3>
+  <pre><code>{
+  "name": "search_web",
+  "description": "在公开网络上搜索最新信息。当需要查询训练数据截止日期
+    之后的事实、实时数据（股价/天气/新闻）、或模型不确定的内容时使用。
+    不要用于写代码或查询内部知识库。返回：最多 5 条结果的标题、摘要与 URL。",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "query": { "type": "string",
+                 "description": "用关键词组成的搜索词，不要用完整问句" }
+    },
+    "required": ["query"]
+  }
+}</code></pre>
+
+  <p>提炼成四条原则（依据 [Writing effective tools for AI agents — Anthropic](https://www.anthropic.com/engineering/writing-tools-for-agents) 与 [Define tools 官方文档](https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools)）：</p>
+
+  <table class="cmp">
+    <thead><tr><th>维度</th><th>怎么写</th></tr></thead>
+    <tbody>
+      <tr><td><strong>名字</strong></td><td>动词+名词，自解释：<code>search_web</code> / <code>get_weather</code> / <code>send_email</code>。相关工具用<strong>命名空间前缀</strong>分组：<code>db_query</code> / <code>db_insert</code>。</td></tr>
+      <tr><td><strong>描述</strong></td><td>回答三问：<em>什么时候用</em>？<em>做什么</em>？<em>返回什么</em>？必要时写「什么时候【不】用」和边界。</td></tr>
+      <tr><td><strong>参数</strong></td><td>名字自解释、每个加 <code>description</code>、标 <code>required</code>；能用 <code>enum</code> 就别用自由文本；给默认值减少必填。</td></tr>
+      <tr><td><strong>数量</strong></td><td class="win">少而精。工具太多会撑爆上下文、且模型选错/漏调。按场景分组或做「工具路由」。</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ============ 3 ============ -->
+  <h2><span class="num">03</span>关键模式：错误当数据返回，而不是抛异常</h2>
+
+  <p>新手最常犯的错：工具一失败就 <code>raise</code> 异常，结果<strong>整个 agent 循环崩溃</strong>。正确做法——</p>
+
+  <blockquote>工具失败时，<strong>捕获异常，把它格式化成一段错误字符串作为 tool 结果返回</strong>，喂回模型。模型读到错误，就能自我纠正（改参数、换工具、或如实报告失败）。</blockquote>
+
+  <p>看演示（<a href="../code/0004_tool_design_demo.py" download>code/0004_tool_design_demo.py</a>），这是我<strong>亲自跑出的真实输出</strong>：</p>
+
+  <pre><code>👤 任务: 查一下北京现在几点、天气如何，给我穿搭建议。
+
+── 第 1 轮：模型请求 1 个工具 ──
+⚙️  Action  : get_weather({'city': '南京'})
+👁  Observe : ERROR: 没有城市「南京」的数据。可选城市：['北京', '上海']
+🛠  处理   : 工具返回错误，但循环【不中断】——喂回模型，让它自己改。
+
+── 第 2 轮：模型请求 2 个工具（并行） ──
+⚙️  Action  : get_weather({'city': '北京'})
+👁  Observe : 5°C，西北风 6 级
+⚙️  Action  : get_time({'timezone': '北京'})
+👁  Observe : 北京 当前 14:30
+
+✅ Final : 北京现在 14:30，5°C 且大风，建议穿厚外套、注意防风保暖。</code></pre>
+
+  <p>关键看 <code>get_weather</code> 的实现——错误是<strong>返回值</strong>，不是异常：</p>
+  <pre><code>def get_weather(city):
+    if city not in table:
+        return f"ERROR: 没有城市「{city}」的数据。可选城市：{list(table)}"  # ← 返回，不是 raise
+    return table[city]</code></pre>
+
+  <div class="callout warn">
+    <span class="head">两个配套铁律</span>
+    ① 错误信息要<strong>对模型有用</strong>——说清「错在哪、可选项」，它才能纠正（光写 "failed" 没用）；<br>
+    ② 一定要配<strong>最大重试次数</strong>，否则模型可能反复卡在同一个错误上死循环。
+  </div>
+
+  <!-- ============ 4 ============ -->
+  <h2><span class="num">04</span>并行工具调用：一轮多个、一起返回</h2>
+
+  <p>上面的输出里，第 2 轮模型<strong>同时</strong>请求了天气和时间——这就是并行调用
+  （[Parallel tool use — Anthropic](https://platform.claude.com/docs/en/agents-and-tools/tool-use/parallel-tool-use)）。</p>
+
+  <p>机制很简单，但有两个要点：</p>
+  <ul>
+    <li><strong>你的代码要执行【全部】请求的工具</strong>，并把<strong>所有结果一起</strong>作为一条消息喂回。别只跑第一个。</li>
+    <li><strong>只对彼此独立的工具并行</strong>。如果工具 B 依赖 A 的结果（A 的输出是 B 的输入），就必须<strong>串行</strong>——模型通常能自己判断，但你在循环里也要意识到这点。</li>
+  </ul>
+
+  <div class="callout insight">
+    <span class="head">为什么值得用</span>
+    研究表明（[arXiv](https://arxiv.org/html/2602.07359v1)），用「并行」扩展宽度能<strong>提升性能、减少所需轮数</strong>——一次拿齐多个独立信息，省掉来回往返。生产里常见一批 5–10 个并行调用。
+  </div>
+
+  <!-- ============ 5 测验 ============ -->
+  <h2><span class="num">05</span>检验一下</h2>
+
+  <div class="quiz">
+    <div class="q"><span class="qnum">Q1</span>工具出错时，最佳做法是？</div>
+    <div class="quiz-opts">
+      <button class="quiz-option" data-correct>把错误作为结果返回</button>
+      <button class="quiz-option">抛出异常中断循环</button>
+      <button class="quiz-option">静默忽略错误信息</button>
+      <button class="quiz-option">反复重试同一调用</button>
+    </div>
+    <div class="feedback"></div>
+  </div>
+
+  <div class="quiz">
+    <div class="q"><span class="qnum">Q2</span>模型一轮请求了 3 个工具，你的代码应该？</div>
+    <div class="quiz-opts">
+      <button class="quiz-option" data-correct>全部执行再一起返回</button>
+      <button class="quiz-option">只执行第一个工具</button>
+      <button class="quiz-option">随机挑一个来执行</button>
+      <button class="quiz-option">报错并终止该任务</button>
+    </div>
+    <div class="feedback"></div>
+  </div>
+
+  <div class="quiz">
+    <div class="q"><span class="qnum">Q3</span>对提升工具调用准确率，影响最大的是？</div>
+    <div class="quiz-opts">
+      <button class="quiz-option" data-correct>详细准确的描述</button>
+      <button class="quiz-option">用更短的函数名</button>
+      <button class="quiz-option">更多的工具数量</button>
+      <button class="quiz-option">更大的模型参数</button>
+    </div>
+    <div class="feedback"></div>
+  </div>
+
+  <p style="text-align:right;font-size:.85rem;color:var(--ink-faint);">本页得分：<span id="page-score">0 / 0 正确</span></p>
+
+  <!-- ============ 6 动手 ============ -->
+  <h2><span class="num">06</span>动手（应用层）</h2>
+  <p>打开 <a href="../code/0004_tool_design_demo.py" download>code/0004_tool_design_demo.py</a>：</p>
+  <p><strong>任务 A</strong>：给 <code>get_time</code> 加一个不存在的时区，让它也返回错误字符串；再在脚本里让模型先犯错、再纠正，观察错误自愈的过程。</p>
+  <p><strong>任务 B</strong>：把第 2 轮改成<strong>三个</strong>并行工具（加一个 <code>get_aqi</code> 空气质量），确认你的循环能正确执行并合并三个结果。</p>
+
+  <button class="reveal-btn" data-show="显示任务 B 的检查点" data-hide="收起">显示任务 B 的检查点</button>
+  <div class="reveal-content">
+    <p>关键不在「能不能跑」，而在两点：① 循环对「一轮多个 tool_calls」是<strong>遍历执行</strong>的（<code>for c in calls</code>），而不是只取 <code>calls[0]</code>；② 多个结果合并到<strong>同一条</strong>喂回消息里。如果你发现第三个工具的结果没被模型「看见」，多半是漏合并了。</p>
+  </div>
+
+  <!-- ============ 主源 ============ -->
+  <div class="source">
+    <span class="head">📖 推荐主源</span>
+    <p style="margin-bottom:.5rem;"><strong>头号主源</strong>：<a href="https://www.anthropic.com/engineering/writing-tools-for-agents" target="_blank" rel="noopener">Writing effective tools for AI agents — Anthropic</a>（选对工具、命名空间化、返回相关上下文）。</p>
+    <p style="margin-bottom:.5rem;"><strong>规格手册</strong>：<a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools" target="_blank" rel="noopener">Define tools 官方文档</a>（描述怎么写、<code>input_examples</code>、schema 约束）。</p>
+    <p style="margin-bottom:0;"><strong>并行与容错</strong>：<a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/parallel-tool-use" target="_blank" rel="noopener">Parallel tool use</a> · <a href="https://pub.towardsai.net/building-retries-in-agents-how-to-build-ai-agents-that-survive-failures-32eedd2623f0" target="_blank" rel="noopener">Building retries in agents — Towards AI</a></p>
+  </div>
+
+  <!-- ============ 联系 mission ============ -->
+  <h2><span class="num">07</span>这和你两条目标的关系</h2>
+  <ul>
+    <li><strong>求职线</strong>：「工具失败怎么处理」「多个工具怎么并行」是工程岗高频题；能讲清「错误当数据返回 + 最大重试」这套容错范式，立刻显得有生产经验。</li>
+    <li><strong>研究线</strong>：「self-correction 是真的吗」是热点争论（[epistemic vs tool-grounded correction](https://medium.com/@Micheal-Lanham/self-correcting-agents-are-not-what-you-they-are-d19398186373)）。本课的「工具反馈纠正」属于可验证的那一类。</li>
+  </ul>
+
+  <div class="callout insight">
+    <span class="head">下一课预告</span>
+    工具、循环、记忆、容错你都凑齐了。第 5 课进入<strong>Planning（规划）</strong>：让 agent 在动手前先「想清楚分几步」——任务分解、反思（reflection）、以及它什么时候有用、什么时候是过度设计。这是从「能跑」到「能解决复杂任务」的跃迁。
+  </div>
+
+  <div class="callout warn">
+    <span class="head">有问题随时问老师 👋</span>
+    比如「工具结果太长塞爆上下文怎么办」「怎么禁止模型并行（强制串行）」「<code>tool_choice</code> 强制调用怎么用」——直接问。
+  </div>
+
+  <div class="lesson-foot">
+    <p>📁 <a href="../MISSION.md">Mission</a> · <a href="../GLOSSARY.md">术语表</a> · <a href="../RESOURCES.md">资源库</a> · <a href="../NOTES.md">学习笔记</a></p>
+    <div class="nav-row">
+      <a href="./0003-memory-and-context.html">← 第 3 课：记忆与上下文管理</a>
+      <a href="./0005-planning-and-reflection.html">第 5 课：规划与反思 →</a>
+    </div>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

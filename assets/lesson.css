@@ -349,6 +349,38 @@ textarea.practice:focus { outline: 2px solid var(--accent); outline-offset: 1px;
   margin-bottom: 0.4rem;
 }
 
+/* ---- comparison tables ---- */
+table.cmp {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.5rem 0;
+  font-size: 0.93rem;
+  line-height: 1.5;
+}
+table.cmp th, table.cmp td {
+  border: 1px solid var(--rule);
+  padding: 0.55rem 0.7rem;
+  text-align: left;
+  vertical-align: top;
+}
+table.cmp thead th {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 0.82rem;
+  letter-spacing: 0.02em;
+}
+table.cmp tbody tr:nth-child(even) td { background: var(--code-bg); }
+table.cmp td.win  { color: var(--note-edge); font-weight: 600; }
+table.cmp td.lose { color: var(--ink-faint); }
+table.cmp caption {
+  caption-side: bottom;
+  font-size: 0.8rem;
+  color: var(--ink-faint);
+  padding-top: 0.5rem;
+  text-align: left;
+}
+
 /* ---- footer ---- */
 .lesson-foot {
   margin-top: 3rem;

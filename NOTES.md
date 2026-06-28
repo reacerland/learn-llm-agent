@@ -17,4 +17,9 @@
 - 「恰到好处地挑战」优先于「轻松流畅」——适当用 desirable difficulty 建立长期记忆（storage strength）。
 
 ## 进度备忘
-- [ ] 第 1 课：什么是 AI Agent（核心循环心智模型）
+- [x] 第 1 课：什么是 AI Agent（核心循环心智模型）
+- [x] 第 2 课：手写最小 Agent 循环（ReAct → 代码；零依赖 mock 已验证可跑）
+- [x] 第 3 课：记忆与上下文管理（两种记忆 / 三策略 / context engineering / prompt caching / RAG 决策表）
+- [x] 第 4 课：工具设计进阶（描述为王 / 错误当数据返回 / 并行调用 / 少而精+命名空间化）
+- [ ] 第 5 课：规划与反思（Planning / 任务分解 / reflection / 何时该用）
+- _后续：Evaluation、Multi-agent、个人项目…_
